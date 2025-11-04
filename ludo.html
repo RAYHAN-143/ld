@@ -1,0 +1,285 @@
+<!doctype html>
+
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ludo — Simple Web Version</title>
+  <style>
+    :root{--size:640px}
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:12px;display:flex;gap:12px;flex-direction:column;align-items:center}
+    .app{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+    .board{position:relative;width:var(--size);height:var(--size);background:#f3f3f3;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.12);}
+    .cell{position:absolute;display:flex;align-items:center;justify-content:center;font-size:12px}
+    /* center big square */
+    .center{left:25%;top:25%;width:50%;height:50%;background:#fff;border:6px solid #ddd;border-radius:6px;display:flex;flex-wrap:wrap}
+    .center .home{flex:1 1 50%;display:flex;align-items:center;justify-content:center}/* token */
+.token{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;position:absolute;transform:translate(-50%,-50%);box-shadow:0 3px 8px rgba(0,0,0,.25)}
+.P0{background:#d32f2f}
+.P1{background:#1976d2}
+
+/* controls */
+.controls{display:flex;flex-direction:column;gap:8px}
+button{padding:10px 14px;border-radius:8px;border:0;background:#111;color:#fff;cursor:pointer}
+.info{min-width:220px;padding:12px;border-radius:8px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.06)}
+.log{height:140px;overflow:auto;font-size:13px;padding:6px}
+
+/* small responsive */
+@media (max-width:700px){:root{--size:320px}}
+
+  </style>
+</head>
+<body>
+  <h2>লুডু — Simple 2‑Player Web Version</h2>
+  <div class="app">
+    <div class="board" id="board" aria-hidden>
+      <div class="center" style="pointer-events:none">
+        <div class="home" style="background:linear-gradient(135deg,#ffcdd2,#ef9a9a)">HOME</div>
+        <div class="home" style="background:linear-gradient(135deg,#bbdefb,#90caf9)">HOME</div>
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-weight:700;color:#666">Ludo</div>
+      </div>
+    </div><div class="controls">
+  <div class="info">
+    <div><strong>Turn:</strong> <span id="turnText">Player 1 (Red)</span></div>
+    <div style="margin-top:6px"><strong>Dice:</strong> <span id="diceVal">-</span></div>
+    <div style="margin-top:8px"><button id="rollBtn">Roll Dice</button></div>
+    <div style="margin-top:8px"><small>নির্দেশনা: ৬ এলে ঘুটি মাঠে নামবে। ঘুটি সিলেক্ট করে Move বাটন দিন।</small></div>
+    <div style="margin-top:8px"><button id="resetBtn" style="background:#777">Reset Game</button></div>
+  </div>
+  <div class="info">
+    <div><strong>Players</strong></div>
+    <div style="margin-top:6px">Red: Player 1</div>
+    <div>Blue: Player 2</div>
+    <hr />
+    <div><strong>Moves / Log</strong></div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+  </div>  <script>
+    /* Simple 2-player Ludo implementation
+       - 2 players (0=Red,1=Blue)
+       - 4 tokens each
+       - linear path: 28 main squares (loop) + 4 goal steps per player
+       - need a 6 to enter from base to starting square
+    */
+
+    const boardEl = document.getElementById('board');
+    const rollBtn = document.getElementById('rollBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const diceVal = document.getElementById('diceVal');
+    const turnText = document.getElementById('turnText');
+    const logEl = document.getElementById('log');
+
+    const SIZE = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--size')) || 640;
+
+    // create 28 loop positions around the center
+    const positions = [];
+    const pad = 8;
+    const edge = SIZE - pad*2;
+    // We'll place 7 positions on each side (top, right, bottom, left) => 28
+    const perSide = 7;
+    for(let i=0;i<perSide;i++){
+      // top row left->right
+      positions.push({x: pad + (edge/perSide)*i + (edge/(perSide*2)), y: pad});
+    }
+    for(let i=0;i<perSide;i++){
+      // right col top->bottom
+      positions.push({x: SIZE - pad, y: pad + (edge/perSide)*i + (edge/(perSide*2))});
+    }
+    for(let i=0;i<perSide;i++){
+      // bottom row right->left
+      positions.push({x: pad + (edge/perSide)*(perSide-1-i) + (edge/(perSide*2)), y: SIZE - pad});
+    }
+    for(let i=0;i<perSide;i++){
+      // left col bottom->top
+      positions.push({x: pad, y: pad + (edge/perSide)*(perSide-1-i) + (edge/(perSide*2))});
+    }
+
+    // starting index for each player on the loop
+    const startIndex = [0, 14]; // red starts at positions[0], blue at [14]
+
+    // goal paths (home stretch) — 4 steps inwards
+    function goalPos(player, step){
+      const center = SIZE/2;
+      const offset = 40 + step*28;
+      if(player===0) return {x:center - offset, y:center};
+      return {x:center + offset, y:center};
+    }
+
+    // create tokens
+    const tokens = [];
+    const tokenEls = [];
+    for(let p=0;p<2;p++){
+      tokens[p] = [];
+      for(let t=0;t<4;t++){
+        tokens[p].push({state:'base', // 'base','onboard','goal','completed'
+                       pos:-1, // index on loop or goal step (0-3)
+                       id:`P${p}T${t}`
+                      });
+        const el = document.createElement('div');
+        el.className = `token P${p}`;
+        el.dataset.player = p;
+        el.dataset.token = t;
+        el.textContent = t+1;
+        el.style.left = (p===0? 40 : SIZE-40) + 'px';
+        el.style.top = (p===0? 40 : SIZE-40) + 'px';
+        el.title = `Player ${p+1} Token ${t+1}`;
+        el.addEventListener('click', ()=> selectToken(p,t));
+        boardEl.appendChild(el);
+        tokenEls.push(el);
+      }
+    }
+
+    function log(msg){
+      const d = document.createElement('div'); d.textContent = msg; logEl.prepend(d);
+    }
+
+    let currentPlayer = 0; // 0 red, 1 blue
+    let dice = null;
+    let selected = null; // {p,t}
+
+    function updateTurnText(){
+      turnText.textContent = `Player ${currentPlayer+1} (${currentPlayer===0? 'Red':'Blue'})`;
+    }
+    updateTurnText();
+
+    function selectToken(p,t){
+      if(p!==currentPlayer){ log('এটি তোমার টার্ন নয়।'); return; }
+      selected = {p,t};
+      log(`Selected token ${t+1} of Player ${p+1}`);
+    }
+
+    function placeTokenElement(p,t){
+      const token = tokens[p][t];
+      const el = document.querySelector(`.token.P${p}[data-token='${t}']`);
+      if(token.state==='base'){
+        // base positions
+        el.style.left = (p===0? 40 : SIZE-40) + 'px';
+        el.style.top = (p===0? 40 : SIZE-40) + 'px';
+        el.style.zIndex = 10;
+      } else if(token.state==='onboard'){
+        const idx = token.pos;
+        const pxy = positions[idx % positions.length];
+        el.style.left = pxy.x + 'px';
+        el.style.top = pxy.y + 'px';
+        el.style.zIndex = 20;
+      } else if(token.state==='goal'){
+        const step = token.pos; // 0..3
+        const pxy = goalPos(p, step);
+        el.style.left = pxy.x + 'px';
+        el.style.top = pxy.y + 'px';
+        el.style.zIndex = 30;
+      } else if(token.state==='completed'){
+        // tuck inside center
+        el.style.left = (SIZE/2 + (Math.random()*20-10)) + 'px';
+        el.style.top = (SIZE/2 + (Math.random()*20-10)) + 'px';
+        el.style.zIndex = 5;
+      }
+    }
+
+    // initial placement
+    for(let p=0;p<2;p++) for(let t=0;t<4;t++) placeTokenElement(p,t);
+
+    function rollDice(){
+      dice = Math.floor(Math.random()*6)+1;
+      diceVal.textContent = dice;
+      log(`Player ${currentPlayer+1} rolled ${dice}`);
+      // if player rolled and has an available move, they must select token and move
+      // We'll allow user to click token then Move by clicking the same roll button again to perform move
+      rollBtn.textContent = 'Move Selected';
+    }
+
+    function moveSelected(){
+      if(!selected){ log('প্রথমে একটি টোকেন সিলেক্ট করো (টোকেনে ক্লিক করো)।'); return; }
+      const {p,t} = selected;
+      if(p!==currentPlayer){ log('এটি তোমার টার্ন নয়।'); return; }
+      const token = tokens[p][t];
+
+      // if on base
+      if(token.state==='base'){
+        if(dice===6){
+          token.state='onboard';
+          token.pos = startIndex[p];
+          log(`Token ${t+1} of Player ${p+1} entered board.`);
+        } else { log('6 না হওয়ায় ঘুটি বের হবে না।'); endTurn(); return; }
+      } else if(token.state==='onboard'){
+        // move along loop
+        const newIdx = (token.pos + dice) % positions.length;
+        // check if this move takes to goal entry
+        // compute distance from startIndex to newIdx in player's path order
+        // player's home entry is (startIndex[p] + positions.length - 1) % positions.length -> fake simple rule: when passing startIndex again count as full loop then move to goal
+        // Simpler rule: if token has completed a full circuit (pos between start and start-1) — for brevity we allow goal if token reaches the index just before start
+        const entryToGoal = (startIndex[p] + positions.length - 1) % positions.length;
+        if(token.pos !== undefined && ((token.pos + dice) % positions.length) === entryToGoal){
+          // enter goal step 0
+          token.state='goal'; token.pos=0;
+          log(`Token ${t+1} of Player ${p+1} entered home stretch.`);
+        } else {
+          token.pos = newIdx;
+        }
+      } else if(token.state==='goal'){
+        const step = token.pos + dice;
+        if(step >=4){
+          token.state='completed'; token.pos = -1; log(`Token ${t+1} of Player ${p+1} completed!`);
+        } else {
+          token.pos = step; log(`Token ${t+1} of Player ${p+1} moved to home step ${token.pos+1}`);
+        }
+      }
+
+      placeTokenElement(p,t);
+      // handle capture: if token lands on opponent token on loop, send opponent to base
+      if(tokens[p][t].state==='onboard'){
+        const idx = tokens[p][t].pos;
+        for(let op=0;op<2;op++) if(op!==p){
+          for(let ot=0;ot<4;ot++){
+            const oth = tokens[op][ot];
+            if(oth.state==='onboard' && oth.pos===idx){
+              // capture
+              oth.state='base'; oth.pos=-1; placeTokenElement(op,ot);
+              log(`Player ${p+1} captured Player ${op+1}'s token ${ot+1}!`);
+            }
+          }
+        }
+      }
+
+      // check win
+      const completedCount = tokens[p].filter(x=>x.state==='completed').length;
+      if(completedCount===4){
+        log(`Player ${p+1} wins the game!`);
+        rollBtn.disabled=true; return;
+      }
+
+      // if rolled 6, player gets another turn; otherwise switch
+      if(dice===6){ log('6 এযোগে আবার তোমার টার্ন।'); dice=null; diceVal.textContent='-'; selected=null; rollBtn.textContent='Roll Dice'; return; }
+      endTurn();
+    }
+
+    function endTurn(){
+      selected = null; dice=null; diceVal.textContent='-'; rollBtn.textContent='Roll Dice';
+      currentPlayer = 1 - currentPlayer; updateTurnText();
+    }
+
+    rollBtn.addEventListener('click', ()=>{
+      if(rollBtn.textContent === 'Roll Dice'){
+        rollDice();
+      } else {
+        // Move
+        if(dice===null){ log('প্রথমে ডাইস রোল করো।'); return; }
+        moveSelected();
+      }
+    });
+
+    resetBtn.addEventListener('click', ()=>{
+      // reset tokens
+      for(let p=0;p<2;p++) for(let t=0;t<4;t++){ tokens[p][t].state='base'; tokens[p][t].pos=-1; placeTokenElement(p,t); }
+      currentPlayer=0; updateTurnText(); log('Game reset.'); rollBtn.disabled=false; dice=null; diceVal.textContent='-'; rollBtn.textContent='Roll Dice';
+    });
+
+    // keyboard convenience: R roll, M move
+    window.addEventListener('keydown',(e)=>{
+      if(e.key.toLowerCase()==='r') rollBtn.click();
+      if(e.key.toLowerCase()==='m') rollBtn.click();
+    });
+  </script></body>
+</html>
